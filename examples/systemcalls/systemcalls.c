@@ -1,4 +1,13 @@
 #include "systemcalls.h"
+#include <sys/types.h>
+#include <unistd.h>
+#include "stdlib.h"
+#include <fcntl.h>
+#include <stdio.h>
+#include <sys/wait.h>
+#include <string.h>
+#include <errno.h>
+#include <syslog.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -16,8 +25,14 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-
-    return true;
+    int result;
+    result = system(cmd);
+    if(result == 0){
+        return true;
+    }
+    else{
+        return false;
+    }
 }
 
 /**
@@ -57,11 +72,46 @@ bool do_exec(int count, ...)
  *   (first argument to execv), and use the remaining arguments
  *   as second argument to the execv() command.
  *
-*/
+*/  
+  int pid;
+  int res;
+  bool fn_result;
+    syslog(LOG_DEBUG | LOG_USER, "calling fork\n");
+    pid = fork();
+    if (pid == -1){
+        syslog(LOG_ERR | LOG_USER, "fork error\n");
+        goto exit;
+    }
+    else if(pid == 0){
+        res = execv(command[0], command);
+        if (res == -1){
+            syslog(LOG_ERR | LOG_USER, "execv error\n");
+            exit(1);
+        }
+        syslog(LOG_ERR | LOG_USER, "after execv, which is unexpected\n");
+    }
+    else{
+        int status;
+        syslog(LOG_DEBUG | LOG_USER, "waiting for pid: %d\n", pid);
+        res = waitpid(pid, &status, 0);
+        if (res == -1){
+            syslog(LOG_ERR | LOG_USER, "waitpid error\n");
+            goto exit;
+        }
+        syslog(LOG_DEBUG | LOG_USER, "child process status: %d\n", status);
+        if (WIFEXITED(status)){
+            if (WEXITSTATUS(status) == 0){
+                syslog(LOG_DEBUG | LOG_USER, "child process succeeded\n");
+                fn_result = true;
+            }
+        }
+    }
 
+exit:
+    syslog(LOG_DEBUG | LOG_USER, "exiting...\n");
     va_end(args);
-
-    return true;
+    closelog();
+    return fn_result;
 }
 
 /**
@@ -91,9 +141,52 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   redirect standard out to a file specified by outputfile.
  *   The rest of the behaviour is same as do_exec()
  *
-*/
+*/ 
+    int res;
+    int fn_result;
+    int fd = open(outputfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd == -1){
+        syslog(LOG_ERR | LOG_USER, "error opening %s\n", outputfile);
+        goto exit;
+    }
 
+    int pid = fork();
+    if (pid == -1){
+        syslog(LOG_ERR | LOG_USER, "fork error\n");
+        goto exit;
+    }
+    else if(pid == 0){
+        syslog(LOG_DEBUG | LOG_USER, "redirecting stdout to %s\n", outputfile);
+        res = dup2(fd, STDOUT_FILENO);
+        if (res == -1){
+            syslog(LOG_ERR | LOG_USER, "dup2 error\n");
+            exit(1);
+        }
+        res = execv(command[0], command);
+        if (res == -1){
+            syslog(LOG_ERR | LOG_USER, "execv error\n");
+            exit(1);
+        }
+        syslog(LOG_ERR | LOG_USER, "after execv, which is unexpected\n");
+    }
+    else{
+        int status;
+        syslog(LOG_DEBUG | LOG_USER, "waiting for pid: %d\n", pid);
+        res = waitpid(pid, &status, 0);
+        if (res == -1){
+            syslog(LOG_ERR | LOG_USER, "waitpid error\n");
+            goto exit;
+        }
+        syslog(LOG_DEBUG | LOG_USER, "child process status: %d\n", status);
+        if (WIFEXITED(status)){
+            if (WEXITSTATUS(status) == 0){
+                syslog(LOG_DEBUG | LOG_USER, "child process succeeded\n");
+                fn_result = true;
+            }
+        }
+    }
+
+exit:
     va_end(args);
-
-    return true;
+    return fn_result;
 }
